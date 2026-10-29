@@ -99,6 +99,12 @@ summary span { color: var(--muted); font-weight: 400; font-variant-numeric: tabu
 .toggles { display: flex; flex-wrap: wrap; gap: 16px; }
 .toggles label { display: flex; align-items: center; gap: 8px; font-weight: 600; }
 .toggles input { width: 20px; height: 20px; accent-color: var(--fg); }
+.backup { border-top: 1px solid var(--line); padding-top: 14px; display: flex; flex-direction: column; gap: 10px; }
+.backup h2 { font-size: .95rem; margin: 0; }
+.backup .row { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.backup button { padding: 12px 10px; font-size: .92rem; }
+.backup .wide { grid-column: 1 / -1; }
+.backup .msg { font-size: .85rem; font-weight: 600; color: var(--rest); min-height: 1.2em; margin: 0; }
 .note { color: var(--muted); font-size: .8rem; line-height: 1.45; margin: 0; }
 @media (prefers-reduced-motion: reduce) { .dial .bar { transition: none; } }
 </style>
@@ -172,6 +178,17 @@ summary span { color: var(--muted); font-weight: 400; font-variant-numeric: tabu
         <label><input id="beepOn" type="checkbox" checked> Pitidos</label>
       </div>
       <p class="note">Avisos: cuenta de 5 antes de la primera ronda, aviso a mitad del ejercicio, aviso a falta de 10 segundos del ejercicio y «Empezamos en 10, 9, 8…» al final del descanso. Sube el volumen del móvil y desactiva el modo silencio.</p>
+      <div class="backup">
+        <h2>Copia de seguridad</h2>
+        <div class="row">
+          <button type="button" id="exportBtn">Exportar copia</button>
+          <button type="button" id="importBtn">Importar copia</button>
+          <button type="button" id="appBtn" class="wide">Guardar la app como archivo</button>
+        </div>
+        <input id="importFile" type="file" accept=".json,application/json" hidden>
+        <p class="msg" id="backupMsg" role="status"></p>
+        <p class="note">La copia guarda tus ajustes y el entrenamiento en curso. «Guardar la app como archivo» crea un único archivo .html que funciona sin internet: ábrelo en un PC o un Android. En iPhone y iPad hay que instalarla desde el enlace.</p>
+      </div>
     </div>
   </details>
 </div>
@@ -419,6 +436,57 @@ summary span { color: var(--muted); font-weight: 400; font-variant-numeric: tabu
   }));
   document.addEventListener('keydown', e => {
     if (e.code === 'Space' && e.target.tagName !== 'INPUT' && e.target.tagName !== 'BUTTON') { e.preventDefault(); $('startBtn').click(); }
+  });
+
+  // ---- Copia de seguridad ----
+  // Todo es síncrono dentro del toque: Safari solo deja compartir archivos si se pide en el mismo gesto.
+  let appHtml = null;
+  if (location.protocol !== 'file:') fetch('index.html').then(r => r.ok ? r.text() : null).then(t => { appHtml = t; }).catch(() => {});
+  else appHtml = '<!doctype html>\n' + document.documentElement.outerHTML;
+  const msg = t => { $('backupMsg').textContent = t; };
+  function saveFile(name, text, type) {
+    const file = new File([text], name, { type });
+    try {
+      if (navigator.canShare && navigator.canShare({ files: [file] })) {
+        navigator.share({ files: [file], title: name }).then(() => msg('Archivo listo: ' + name)).catch(() => {});
+        return;
+      }
+    } catch (e) {}
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(file); a.download = name;
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(a.href), 4000);
+    msg('Descargado: ' + name);
+  }
+  const today = () => new Date().toISOString().slice(0, 10);
+  $('exportBtn').addEventListener('click', () => {
+    const o = { app: 'contador-series', version: 1, exportado: new Date().toISOString(), ajustes: {}, entrenamiento: { start: startedAt, end: finishedAt } };
+    fields.forEach(k => o.ajustes[k] = $(k).value);
+    o.ajustes.voiceOn = $('voiceOn').checked; o.ajustes.beepOn = $('beepOn').checked;
+    saveFile('contador-copia-' + today() + '.json', JSON.stringify(o, null, 2), 'application/json');
+  });
+  $('importBtn').addEventListener('click', () => $('importFile').click());
+  $('importFile').addEventListener('change', e => {
+    const f = e.target.files && e.target.files[0]; e.target.value = '';
+    if (!f) return;
+    f.text().then(t => {
+      const o = JSON.parse(t);
+      if (!o || o.app !== 'contador-series' || !o.ajustes) throw new Error();
+      fields.forEach(k => { if (k in o.ajustes) $(k).value = o.ajustes[k]; });
+      if ('voiceOn' in o.ajustes) $('voiceOn').checked = !!o.ajustes.voiceOn;
+      if ('beepOn' in o.ajustes) $('beepOn').checked = !!o.ajustes.beepOn;
+      saveCfg();
+      if (o.entrenamiento && typeof o.entrenamiento.start === 'number') {
+        startedAt = o.entrenamiento.start; finishedAt = typeof o.entrenamiento.end === 'number' ? o.entrenamiento.end : null;
+        saveSess(); updateClock();
+      }
+      if (phase === 'idle' || phase === 'done') { cfg = config(); render(cfg.work); }
+      msg('Copia importada.');
+    }).catch(() => msg('Ese archivo no es una copia del Contador de Series.'));
+  });
+  $('appBtn').addEventListener('click', () => {
+    if (!appHtml) { msg('Abre la app una vez con internet y vuelve a intentarlo.'); return; }
+    saveFile('contador-series.html', appHtml, 'text/html');
   });
 
   reset();
